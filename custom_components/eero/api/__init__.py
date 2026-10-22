@@ -209,6 +209,14 @@ class EeroAPI(object):
                 _LOGGER.debug("Session has expired and is invalid")
                 self.login_refresh()
                 response = self.timeout(function)
+                # A retry that fails too is an error, not data (its error body has no "data").
+                if not response.ok:
+                    raise EeroException(
+                        code=response.status_code,
+                        error=response.reason,
+                        message=f"Bad response received from URL after refreshing the session: {response.url}",
+                        payload=response.text,
+                    )
             else:
                 raise EeroException(
                     code=response.status_code,
@@ -358,6 +366,10 @@ class EeroAPI(object):
             method=METHOD_GET,
             url=network_data["resources"][resource],
         )
+        if resource_data is None:
+            # No list at all (not an empty one): keep the last good data instead of
+            # failing with TypeError on len(None).
+            raise EeroException(message=f"No {resource} data received")
         return {
             "count": len(resource_data),
             "data": resource_data,

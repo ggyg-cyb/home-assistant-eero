@@ -431,14 +431,37 @@ class EeroEntity(CoordinatorEntity):
             if network.id == self.network_id:
                 return network
 
-    @property
-    def resource(self) -> EeroResource | None:
-        """Return the state attributes."""
-        if self.resource_id:
-            for resource in self.network.resources:
+    def _find_resource(self) -> EeroResource | None:
+        """Return this entity's resource in the latest data, or None when it's gone."""
+        network = self.network
+        if network is None:
+            return None
+        if not self.resource_id:
+            return network
+        for resource in network.resources:
                 if resource.id == self.resource_id:
                     return resource
-        return self.network
+        return None
+
+    @property
+    def resource(self) -> EeroResource | None:
+        """Return the resource this entity represents.
+
+        A client that leaves the network's device list (a guest gone, a private
+        address rotated, a device long offline) keeps its last known data here
+        and the entity turns unavailable. Falling back to the network instead
+        made every client attribute raise AttributeError on each update.
+        """
+        resource = self._find_resource()
+        if resource is not None:
+            self._last_resource = resource
+            return resource
+        return getattr(self, "_last_resource", None) or self.network
+
+    @property
+    def available(self) -> bool:
+        """Return True when the resource is still in the latest data."""
+        return super().available and self._find_resource() is not None
 
     @property
     def unique_id(self) -> str:
