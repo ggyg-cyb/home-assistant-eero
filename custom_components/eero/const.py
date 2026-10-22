@@ -77,6 +77,8 @@ DOMAIN = "eero"
 MANUFACTURER = "eero"
 
 MODEL_BACKUP_NETWORK = "Backup Network"
+AGE_OFF_DAYS = 30
+
 MODEL_CLIENT_WIRED = "Client (Wired)"
 MODEL_CLIENT_WIRELESS = "Client (Wireless)"
 MODEL_EERO = "eero"

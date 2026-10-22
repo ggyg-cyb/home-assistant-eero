@@ -10,19 +10,22 @@ import voluptuous as vol
 from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import Platform, CONF_NAME, CONF_SCAN_INTERVAL
-from homeassistant.core import HomeAssistant
+from homeassistant.const import CONF_NAME, CONF_SCAN_INTERVAL, Platform
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import (
     config_validation as cv,
     device_registry as dr,
     entity_registry as er,
 )
 from homeassistant.helpers.entity import EntityDescription
+from homeassistant.helpers.event import async_track_time_interval
+from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import (
     CoordinatorEntity,
     DataUpdateCoordinator,
     UpdateFailed,
 )
+from homeassistant.util import dt as dt_util
 
 from .api import EeroAPI, EeroException, EeroUpdateConfig
 from .api.const import SUPPORTED_APPS
@@ -31,6 +34,7 @@ from .api.resource import EeroResource
 from .config_flow import EeroConfigFlow
 from .const import (
     ACTIVITIES_PREMIUM,
+    AGE_OFF_DAYS,
     ATTR_BLOCKED_APPS,
     ATTR_TARGET_NETWORK,
     ATTR_TARGET_PROFILE,
@@ -385,7 +389,75 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> b
 
     await hass.config_entries.async_forward_entry_setups(config_entry, PLATFORMS)
 
+    store = Store(hass, 1, f"{DOMAIN}.{config_entry.entry_id}.last_seen")
+    last_seen = await store.async_load() or {}
+
+    @callback
+    def async_age_off(_now=None) -> None:
+        """Remove client devices that have been gone from eero for AGE_OFF_DAYS."""
+        if not coordinator.last_update_success or coordinator.data is None:
+            return
+        present = set()
+        for network in coordinator.data.networks:
+            present.add(network.id)
+            present.update(resource.id for resource in network.resources)
+        if not any(network.clients for network in coordinator.data.networks):
+            # An empty client list is more likely a bad response than everyone leaving
+            return
+        now = dt_util.utcnow()
+        known = set()
+        for device_entry in dr.async_entries_for_config_entry(
+            device_registry, config_entry.entry_id
+        ):
+            if device_entry.model not in [MODEL_CLIENT_WIRED, MODEL_CLIENT_WIRELESS]:
+                continue
+            for domain, resource_id in device_entry.identifiers:
+                if domain != DOMAIN:
+                    continue
+                known.add(resource_id)
+                if resource_id in present:
+                    last_seen[resource_id] = now.isoformat()
+                    continue
+                seen = dt_util.parse_datetime(
+                    last_seen.setdefault(resource_id, now.isoformat())
+                )
+                if seen and now - seen >= timedelta(days=AGE_OFF_DAYS):
+                    _LOGGER.info(
+                        "Removing device not seen for %s days: %s - %s",
+                        AGE_OFF_DAYS,
+                        device_entry.name,
+                        device_entry.model,
+                    )
+                    device_registry.async_remove_device(device_entry.id)
+                    known.discard(resource_id)
+        for resource_id in set(last_seen) - known:
+            last_seen.pop(resource_id)
+        store.async_delay_save(lambda: last_seen, 60)
+
+    async_age_off()
+    config_entry.async_on_unload(
+        async_track_time_interval(hass, async_age_off, timedelta(hours=1))
+    )
+
     return True
+
+
+async def async_remove_config_entry_device(
+    hass: HomeAssistant, config_entry: ConfigEntry, device_entry: dr.DeviceEntry
+) -> bool:
+    """Allow deleting a device in the UI when eero no longer lists it."""
+    coordinator = hass.data[DOMAIN][config_entry.entry_id][DATA_COORDINATOR]
+    if coordinator.data is None:
+        return False
+    present = set()
+    for network in coordinator.data.networks:
+        present.add(network.id)
+        present.update(resource.id for resource in network.resources)
+    return not any(
+        resource_id in present
+        for domain, resource_id in device_entry.identifiers
+        if domain == DOMAIN
+    )
 
 
 async def async_unload_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> bool:
