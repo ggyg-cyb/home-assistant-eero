@@ -562,7 +562,7 @@ class EeroEntity(CoordinatorEntity):
             if self.suffix_connection_type:
                 name = self.resource.name_connection_type
 
-        entry_type, suggested_area, sw_version, hw_version, via_device = None, None, None, None, None
+        entry_type, suggested_area, sw_version, hw_version, via_device_id = None, None, None, None, None
         if any(
             [
                 self.resource.is_backup_network,
@@ -583,7 +583,14 @@ class EeroEntity(CoordinatorEntity):
                 self.resource.is_client,
             ]
         ):
-            via_device = (DOMAIN, self.network.id)
+            # HA 2026.11 deprecated DeviceInfo.via_device (identifier tuple) in favour of
+            # via_device_id (the parent device's registry id). Leaving via_device in place made
+            # the image platform fatally error (report_usage -> MissingIntegrationFrame).
+            network_device = dr.async_get(self.hass).async_get_device(
+                identifiers={(DOMAIN, self.network.id)}
+            )
+            if network_device is not None:
+                via_device_id = network_device.id
 
         return dr.DeviceInfo(
             entry_type=entry_type,
@@ -594,7 +601,7 @@ class EeroEntity(CoordinatorEntity):
             name=name,
             suggested_area=suggested_area,
             sw_version=sw_version,
-            via_device=via_device,
+            via_device_id=via_device_id,
         )
 
     @property
