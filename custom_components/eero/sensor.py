@@ -76,6 +76,7 @@ class EeroSensorEntityDescription(EeroEntityDescription, SensorEntityDescription
     entity_category: str[EntityCategory] | None = EntityCategory.DIAGNOSTIC
     activity_type: bool = False
     wireless_only: bool = False
+    connected_only: bool = False   # a client eero still lists but marks offline keeps its last reading; show unavailable
 
 SENSOR_DESCRIPTIONS: list[EeroSensorEntityDescription] = [
     EeroSensorEntityDescription(
@@ -219,6 +220,7 @@ SENSOR_DESCRIPTIONS: list[EeroSensorEntityDescription] = [
         native_value=lambda resource, key: getattr(resource, key)[0],
         native_unit_of_measurement=lambda resource, key: SIGNAL_STRENGTH_UNIT_MAP.get(getattr(resource, key)[1], getattr(resource, key)[1]),
         wireless_only=True,
+        connected_only=True,
     ),
     EeroSensorEntityDescription(
         key="speed_down",
@@ -389,6 +391,14 @@ async def async_setup_entry(
 
 class EeroSensorEntity(EeroEntity, SensorEntity):
     """Representation of an Eero sensor entity."""
+
+    @property
+    def available(self) -> bool:
+        """Unavailable while eero lists the client as offline (it keeps the last signal it saw)."""
+        if not super().available:
+            return False
+        return not (self.entity_description.connected_only
+                    and self.resource.is_client and self.resource.connected is False)
 
     @property
     def native_value(self) -> StateType | datetime:
